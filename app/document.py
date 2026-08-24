@@ -649,8 +649,14 @@ def build_assessment_table(doc: PEAReport, report: PEAReport) -> None:
         _add_content_row(table, "Recommendations", _species_recommendations_lines(section))
 
 
-def build_appendix_placeholders(doc: Document) -> None:
-    def add_placeholder_page(title: str, body_text: str):
+def build_appendix_placeholders(
+    doc: Document,
+    habitat_map_path: str | None = None,
+    location_map_path: str | None = None,
+    proposed_plan_path: str | None = None,
+    photo_paths: list[str] | None = None,
+) -> None:
+    def add_appendix_page(title: str, placeholder_text: str, image_path: str | None):
         doc.add_page_break()
         heading = doc.add_paragraph()
         r = heading.add_run(title)
@@ -662,15 +668,26 @@ def build_appendix_placeholders(doc: Document) -> None:
         box.style = "Table Grid"
         cell = box.cell(0, 0)
         cell.text = ""
-        set_cell_background(cell, LIGHT_GREEN)
         p = cell.paragraphs[0]
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = p.add_run(body_text)
-        run.italic = True
 
-    add_placeholder_page("Appendix 1: Survey/Habitat Map", "[Survey/Habitat map to be inserted]")
-    add_placeholder_page("Appendix 2: Location Map", "[Location map to be inserted]")
-    add_placeholder_page("Appendix 3: Proposed Plan", "[Proposed plan to be inserted]")
+        if image_path and os.path.exists(image_path):
+            run = p.add_run()
+            run.add_picture(image_path, width=Cm(22))
+        else:
+            set_cell_background(cell, LIGHT_GREEN)
+            run = p.add_run(placeholder_text)
+            run.italic = True
+
+    add_appendix_page(
+        "Appendix 1: Survey/Habitat Map", "[Survey/Habitat map to be inserted]", habitat_map_path
+    )
+    add_appendix_page(
+        "Appendix 2: Location Map", "[Location map to be inserted]", location_map_path
+    )
+    add_appendix_page(
+        "Appendix 3: Proposed Plan", "[Proposed plan to be inserted]", proposed_plan_path
+    )
 
     doc.add_page_break()
     heading = doc.add_paragraph()
@@ -690,13 +707,30 @@ def build_appendix_placeholders(doc: Document) -> None:
         r.font.color.rgb = RGBColor.from_string(WHITE)
         set_cell_background(cell, DARK_GREEN)
 
+    for photo_path in photo_paths or []:
+        if not photo_path or not os.path.exists(photo_path):
+            continue
+        row = table.add_row()
+        photo_cell, description_cell = row.cells[0], row.cells[1]
+        photo_cell.text = ""
+        run = photo_cell.paragraphs[0].add_run()
+        run.add_picture(photo_path, width=Cm(16))
+        description_cell.text = ""
+
 
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
 
 
-def build_document(report: PEAReport, logo_path: str | None = None) -> str:
+def build_document(
+    report: PEAReport,
+    logo_path: str | None = None,
+    habitat_map_path: str | None = None,
+    location_map_path: str | None = None,
+    proposed_plan_path: str | None = None,
+    photo_paths: list[str] | None = None,
+) -> str:
     doc = Document()
     configure_base_styles(doc)
 
@@ -710,7 +744,13 @@ def build_document(report: PEAReport, logo_path: str | None = None) -> str:
     build_version_control_page(doc, report.site_info, report.author_info)
     build_survey_conditions(doc, report.survey_conditions, report.author_info)
     build_assessment_table(doc, report)
-    build_appendix_placeholders(doc)
+    build_appendix_placeholders(
+        doc,
+        habitat_map_path=habitat_map_path,
+        location_map_path=location_map_path,
+        proposed_plan_path=proposed_plan_path,
+        photo_paths=photo_paths,
+    )
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     filename = f"{report.report_id}.docx"
