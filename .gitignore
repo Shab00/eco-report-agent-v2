@@ -3,3 +3,4 @@ venv/
 generated/
 __pycache__/
 *.pyc
+*.docx
