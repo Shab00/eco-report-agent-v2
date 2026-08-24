@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import uuid
@@ -53,6 +54,9 @@ def _cleanup(*paths: str | None | list[str]) -> None:
 @router.post("/survey", response_model=SurveyResponse)
 async def submit_survey(
     survey: str = Form(..., description="JSON-encoded SurveyRequest payload"),
+    photo_descriptions: str = Form(
+        "[]", description="JSON-encoded list of photo caption strings, aligned by index with photos"
+    ),
     habitat_map: UploadFile | None = File(None),
     location_map: UploadFile | None = File(None),
     proposed_plan: UploadFile | None = File(None),
@@ -62,6 +66,15 @@ async def submit_survey(
         survey_data = SurveyRequest.model_validate_json(survey)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors())
+
+    try:
+        photo_descriptions_list = json.loads(photo_descriptions)
+        if not isinstance(photo_descriptions_list, list) or not all(
+            isinstance(item, str) for item in photo_descriptions_list
+        ):
+            raise ValueError("photo_descriptions must be a JSON array of strings")
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid photo_descriptions: {exc}")
 
     survey_id = str(uuid.uuid4())
 
@@ -83,6 +96,7 @@ async def submit_survey(
             location_map_path=location_map_path,
             proposed_plan_path=proposed_plan_path,
             photo_paths=photo_paths,
+            photo_descriptions=photo_descriptions_list,
         )
         report.docx_path = docx_path
 

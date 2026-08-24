@@ -93,6 +93,7 @@ class SurveyRequest(BaseModel):
     riparian_notes: str
     dormouse_notes: str
     hedgehog_notes: str
+    photo_descriptions: list[str] = []
 
 
 class SurveyResponse(BaseModel):

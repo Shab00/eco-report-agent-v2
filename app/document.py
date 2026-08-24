@@ -70,6 +70,12 @@ _TCPR_TAG_SEQ = (
 
 
 def _insert_tcPr_child(tcPr, element, tag: str) -> None:
+    # insert_element_before only inserts; if an element with this tag
+    # already exists (e.g. python-docx seeded a default one), it must be
+    # removed first or the old one stays first and shadows the new one.
+    existing = tcPr.find(qn(tag))
+    if existing is not None:
+        tcPr.remove(existing)
     successors = _TCPR_TAG_SEQ[_TCPR_TAG_SEQ.index(tag) + 1 :]
     tcPr.insert_element_before(element, *successors)
 
@@ -117,6 +123,12 @@ _TBLPR_TAG_SEQ = (
 
 
 def _insert_tblPr_child(tblPr, element, tag: str) -> None:
+    # Same fix as _insert_tcPr_child: replace, don't duplicate, an
+    # existing element of this tag (e.g. the default tblW that
+    # doc.add_table() always seeds).
+    existing = tblPr.find(qn(tag))
+    if existing is not None:
+        tblPr.remove(existing)
     successors = _TBLPR_TAG_SEQ[_TBLPR_TAG_SEQ.index(tag) + 1 :]
     tblPr.insert_element_before(element, *successors)
 
@@ -136,6 +148,35 @@ def set_table_top_rule(table, hex_color: str, size_eighths_pt: int = 12) -> None
         el.set(qn("w:val"), "nil")
         borders.append(el)
     _insert_tblPr_child(tblPr, borders, "w:tblBorders")
+
+
+def set_table_exact_width(table, width_twips: int) -> None:
+    """Pin the table's overall width and its single grid column to an
+    exact twips value, and zero out indent/cell-spacing, instead of
+    relying on tblW type="auto" + fixed layout to infer the width from
+    the grid column alone. Word can round that combination slightly short
+    of the page edge, leaving a thin unshaded sliver next to a full-bleed
+    background table."""
+    tbl = table._tbl
+    tblPr = tbl.tblPr
+
+    tblW = OxmlElement("w:tblW")
+    tblW.set(qn("w:type"), "dxa")
+    tblW.set(qn("w:w"), str(width_twips))
+    _insert_tblPr_child(tblPr, tblW, "w:tblW")
+
+    tblCellSpacing = OxmlElement("w:tblCellSpacing")
+    tblCellSpacing.set(qn("w:type"), "dxa")
+    tblCellSpacing.set(qn("w:w"), "0")
+    _insert_tblPr_child(tblPr, tblCellSpacing, "w:tblCellSpacing")
+
+    tblInd = OxmlElement("w:tblInd")
+    tblInd.set(qn("w:type"), "dxa")
+    tblInd.set(qn("w:w"), "0")
+    _insert_tblPr_child(tblPr, tblInd, "w:tblInd")
+
+    for gridCol in tbl.tblGrid.findall(qn("w:gridCol")):
+        gridCol.set(qn("w:w"), str(width_twips))
 
 
 def add_page_number_field(paragraph, instruction: str = "PAGE") -> None:
@@ -344,6 +385,7 @@ def build_cover_page(doc: Document, site_info: SiteInfo, author_info: AuthorInfo
     section = doc.sections[0]
     configure_section(section, margins_cm=None)
 
+    page_width_twips = section.page_width.twips
     page_height_twips = section.page_height.twips
     author_row_twips = 1500
     main_row_twips = page_height_twips - author_row_twips
@@ -355,6 +397,7 @@ def build_cover_page(doc: Document, site_info: SiteInfo, author_info: AuthorInfo
     table = doc.add_table(rows=2, cols=1)
     table.autofit = False
     table.columns[0].width = section.page_width
+    set_table_exact_width(table, page_width_twips)
 
     main_cell = table.cell(0, 0)
     main_cell.width = section.page_width
@@ -376,6 +419,10 @@ def build_cover_page(doc: Document, site_info: SiteInfo, author_info: AuthorInfo
     if effective_logo_path and os.path.exists(effective_logo_path):
         logo_paragraph = main_cell.paragraphs[0]
         logo_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        # Keep the logo glued to the titles that follow it so the exact-
+        # height main row can't force a split across pages.
+        logo_paragraph.paragraph_format.keep_with_next = True
+        logo_paragraph.paragraph_format.space_after = Pt(18)
         run = logo_paragraph.add_run()
         run.add_picture(effective_logo_path, width=Cm(6))
 
@@ -387,10 +434,12 @@ def build_cover_page(doc: Document, site_info: SiteInfo, author_info: AuthorInfo
         color: str | None = None,
         font_name: str | None = None,
         space_before: int = 6,
+        keep_with_next: bool = False,
     ):
         p = main_cell.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p.paragraph_format.space_before = Pt(space_before)
+        p.paragraph_format.keep_with_next = keep_with_next
         r = p.add_run(text)
         r.bold = bold
         r.italic = italic
@@ -401,11 +450,18 @@ def build_cover_page(doc: Document, site_info: SiteInfo, author_info: AuthorInfo
             r.font.name = font_name
         return p
 
-    add_cover_paragraph("GREENLIGHT ECOLOGY LTD", 16, bold=True, color=DARK_GREEN, space_before=12)
     add_cover_paragraph(
-        "Preliminary Ecological Appraisal", 22, italic=True, font_name="Times New Roman", space_before=18
+        "GREENLIGHT ECOLOGY LTD", 16, bold=True, color=DARK_GREEN, space_before=18, keep_with_next=True
     )
-    add_cover_paragraph(site_info.site_name, 13, color=DARK_GREEN, space_before=12)
+    add_cover_paragraph(
+        "Preliminary Ecological Appraisal",
+        22,
+        italic=True,
+        font_name="Times New Roman",
+        space_before=24,
+        keep_with_next=True,
+    )
+    add_cover_paragraph(site_info.site_name, 13, color=DARK_GREEN, space_before=16)
 
     author_cell.text = ""
     author_paragraph = author_cell.paragraphs[0]
@@ -685,6 +741,7 @@ def build_appendix_placeholders(
     location_map_path: str | None = None,
     proposed_plan_path: str | None = None,
     photo_paths: list[str] | None = None,
+    photo_descriptions: list[str] | None = None,
 ) -> None:
     def add_appendix_page(title: str, placeholder_text: str, image_path: str | None):
         doc.add_page_break()
@@ -737,7 +794,8 @@ def build_appendix_placeholders(
         r.font.color.rgb = RGBColor.from_string(WHITE)
         set_cell_background(cell, DARK_GREEN)
 
-    for photo_path in photo_paths or []:
+    descriptions = photo_descriptions or []
+    for idx, photo_path in enumerate(photo_paths or []):
         if not photo_path or not os.path.exists(photo_path):
             continue
         row = table.add_row()
@@ -745,7 +803,15 @@ def build_appendix_placeholders(
         photo_cell.text = ""
         run = photo_cell.paragraphs[0].add_run()
         run.add_picture(_unique_image_stream(photo_path), width=Cm(16))
+
         description_cell.text = ""
+        description_text = sanitize_text(descriptions[idx]) if idx < len(descriptions) else ""
+        if not description_text:
+            description_text = f"Figure {idx + 1}:"
+        description_run = description_cell.paragraphs[0].add_run(description_text)
+        description_run.bold = True
+        description_run.font.color.rgb = RGBColor.from_string(DARK_GREEN)
+        description_run.font.size = Pt(10)
 
 
 # --------------------------------------------------------------------------
@@ -760,6 +826,7 @@ def build_document(
     location_map_path: str | None = None,
     proposed_plan_path: str | None = None,
     photo_paths: list[str] | None = None,
+    photo_descriptions: list[str] | None = None,
 ) -> str:
     doc = Document()
     configure_base_styles(doc)
@@ -780,6 +847,7 @@ def build_document(
         location_map_path=location_map_path,
         proposed_plan_path=proposed_plan_path,
         photo_paths=photo_paths,
+        photo_descriptions=photo_descriptions,
     )
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
