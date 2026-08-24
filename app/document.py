@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 import re
 import unicodedata
@@ -13,6 +14,8 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Mm, Pt, RGBColor
+from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 
 from app.models import AuthorInfo, PEAReport, SiteInfo, SurveyConditions
 
@@ -649,6 +652,33 @@ def build_assessment_table(doc: PEAReport, report: PEAReport) -> None:
         _add_content_row(table, "Recommendations", _species_recommendations_lines(section))
 
 
+def _unique_image_stream(path: str) -> io.BytesIO:
+    """Re-encode the image and tag it with a unique PNG text chunk before
+    handing it to add_picture().
+
+    python-docx deduplicates embedded images by SHA1 of their bytes
+    (docx.package.ImageParts._get_by_sha1): if the same file is embedded
+    more than once in a document (e.g. the same logo used for the cover
+    page and again as an appendix image, or the same photo uploaded
+    twice), every extra embed after the first reuses the *same*
+    relationship id rather than getting a new one. Word rejects the
+    resulting file as unreadable because multiple <a:blip> elements end
+    up pointing at one r:embed. A plain re-encode isn't enough on its own
+    either, since PIL's PNG output is deterministic - re-encoding the same
+    source twice still produces identical bytes. Stamping a random uid
+    into a tEXt chunk on every call guarantees distinct bytes -> distinct
+    SHA1 -> a fresh image part and relationship id every time, regardless
+    of how many times the same source file is reused.
+    """
+    image = Image.open(path)
+    info = PngInfo()
+    info.add_text("uid", uuid.uuid4().hex)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG", pnginfo=info)
+    buffer.seek(0)
+    return buffer
+
+
 def build_appendix_placeholders(
     doc: Document,
     habitat_map_path: str | None = None,
@@ -673,7 +703,7 @@ def build_appendix_placeholders(
 
         if image_path and os.path.exists(image_path):
             run = p.add_run()
-            run.add_picture(image_path, width=Cm(22))
+            run.add_picture(_unique_image_stream(image_path), width=Cm(22))
         else:
             set_cell_background(cell, LIGHT_GREEN)
             run = p.add_run(placeholder_text)
@@ -714,7 +744,7 @@ def build_appendix_placeholders(
         photo_cell, description_cell = row.cells[0], row.cells[1]
         photo_cell.text = ""
         run = photo_cell.paragraphs[0].add_run()
-        run.add_picture(photo_path, width=Cm(16))
+        run.add_picture(_unique_image_stream(photo_path), width=Cm(16))
         description_cell.text = ""
 
 

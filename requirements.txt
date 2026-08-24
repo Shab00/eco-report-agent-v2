@@ -6,3 +6,4 @@ python-dotenv
 python-docx
 httpx
 python-multipart
+Pillow
